@@ -21,7 +21,11 @@ import time
 import Bio
 from Bio import SeqIO
 import subprocess
+import incompatible_primers
+import json
+import pickle
 
+testing_skip = False
 
 """## Descarga de secuencias
 
@@ -51,8 +55,8 @@ intron_extra = 150
 *  verbose = si se hace un print del avance (Si es True, se muestran los prints)
 """
 
-num_s0 = 5
-epochs = 5000
+num_s0 = 20
+epochs = 50000
 verbose = True
 
 """Determinacion de parmetros del amplicon y el pivot (region a secuenciar)"""
@@ -141,25 +145,135 @@ def calc_primer_dg(primer_seq):
 def select_primers(seq_info_dict):
 
     first = random.choice(['fw','rv'])
-    c = 0
+
+    temp_forward_primers = copy.deepcopy(seq_info_dict['forward_primers'])
+    temp_reverse_primers = copy.deepcopy(seq_info_dict['reverse_primers'])
 
     if first == 'fw':
-        forward = random.choice(seq_info_dict['forward_primers'])
-        reverse = random.choice(seq_info_dict['reverse_primers'])
+        forward = random.choice(temp_forward_primers)
 
-        while reverse['primer_5'] - forward['primer_5'] > amplicon_max_size:
-            reverse = random.choice(seq_info_dict['reverse_primers'])
+        while forward['primer_id'] in incompatible_set:
+            # Si el forward seleccionado esta dentro del set de incompat.,
+            # se remueve de la lista temporal de primers a elegir.
+            try:
+                temp_forward_primers.remove(forward)
+
+            except ValueError as e:
+                print('NUMERO 1')
+                print(e)
+                print(forward)
+                print(temp_forward_primers)
+                print('LARGO', len(temp_forward_primers))
+
+            if len(temp_forward_primers) > 0:
+                forward = random.choice(temp_forward_primers)
+                # Si la lista se queda sin primers
+                # osea, (len(temp_forward_primers) == 0)
+                # se dejara el primer que ya estaba
+            else:
+                forward = seq_info_dict['forward']
+                break
+
+
+        reverse = random.choice(temp_reverse_primers)
+
+        while (
+                reverse['primer_id'] in incompatible_set or
+                reverse['primer_5'] - forward['primer_5'] > amplicon_max_size
+        ):
+
+            try:
+                temp_reverse_primers.remove(reverse)
+
+            except ValueError as e:
+                print('NUMERO 2')
+                print(e)
+                print(reverse)
+                print(temp_reverse_primers)
+                print('LARGO', len(temp_reverse_primers))
+
+            if len(temp_reverse_primers) > 0:
+                reverse = random.choice(temp_reverse_primers)
+
+            else:
+                reverse = seq_info_dict['reverse']
+                break
 
     elif first == 'rv':
-        reverse = random.choice(seq_info_dict['reverse_primers'])
-        forward = random.choice(seq_info_dict['forward_primers'])
 
-        while reverse['primer_5'] - forward['primer_5'] > amplicon_max_size:
-            forward = random.choice(seq_info_dict['forward_primers'])
+        reverse = random.choice(temp_reverse_primers)
 
-    seq_info_dict['forward'] = forward['primer_seq']
-    seq_info_dict['reverse'] = reverse['primer_seq']
+        while reverse['primer_id'] in incompatible_set :
+            # Si el forward seleccionado esta dentro del set de incompat.,
+            # se remueve de la lista temporal de primers a elegir.
+            try:
+                temp_reverse_primers.remove(reverse)
 
+            except ValueError as e:
+                print('NUMERO 3')
+                print(e)
+                print(reverse)
+                print(temp_reverse_primers)
+                print('LARGO', len(temp_reverse_primers))
+
+            if len(temp_reverse_primers) > 0:
+                reverse = random.choice(temp_reverse_primers)
+                # Si la lista se queda sin primers
+                # osea, (len(temp_forward_primers) == 0)
+                # se dejara el primer que ya estaba
+            else:
+                reverse = seq_info_dict['reverse']
+                break
+
+
+
+        forward = random.choice(temp_forward_primers)
+
+        while (
+                forward['primer_id'] in incompatible_set or
+                reverse['primer_5'] - forward['primer_5'] > amplicon_max_size
+        ):
+
+            try:
+                temp_forward_primers.remove(forward)
+
+            except ValueError as e:
+                print('NUMERO 4')
+                print(e)
+                print(forward)
+                print(temp_forward_primers)
+                print('LARGO', len(temp_forward_primers))
+
+            if len(temp_forward_primers) > 0:
+                forward = random.choice(temp_forward_primers)
+
+            else:
+                forward = seq_info_dict['forward']
+                break
+
+    seq_info_dict['forward'] = forward
+    seq_info_dict['reverse'] = reverse
+
+def gen_incompatible_set(seqs_info_list):
+
+    incompatible_set = set()
+
+    for seq_info in seqs_info_list:
+        try:
+            forward_id = seq_info['forward']['primer_id']
+            for element in incompatiblity_dict[forward_id]:
+                incompatible_set.add(element)
+        except KeyError:
+            pass
+
+        try:
+            reverse_id = seq_info['forward']['primer_id']
+            for element in incompatiblity_dict[reverse_id]:
+                incompatible_set.add(element)
+        except KeyError:
+            pass
+
+    return incompatible_set
 
 def reverse_complement(seq):
 
@@ -186,327 +300,359 @@ def gen_subseq(largo):
 
 
 """## Creacion de diccionario de lista de diccionarios de secuencias seqs_info"""
+if testing_skip == False:
 
-print('Generando diccionario de secuencias target...')
+    print('Generando diccionario de secuencias target...')
 
-seqs = []
+    seqs = []
 
-for record in SeqIO.parse("example/targets-CFTR.fasta", "fasta"):
-  seq = str(record.seq).upper()
-  id = str(record.id)
+    for record in SeqIO.parse("example/targets-CFTR.fasta", "fasta"):
+      seq = str(record.seq).upper()
+      id = str(record.id)
 
-  if len(seq) - intron_extra*2 > max_pivot_size :
-    chunks = math.ceil(len(seq)/max_pivot_size)
-    for j in range(chunks):
-      chunk_5 =j*max_pivot_size - intron_extra
-      if chunk_5 < 0:
-        chunk_5 = 0
+      if len(seq) - intron_extra*2 > max_pivot_size :
+        chunks = math.ceil(len(seq)/max_pivot_size)
+        for j in range(chunks):
+          chunk_5 =j*max_pivot_size - intron_extra
+          if chunk_5 < 0:
+            chunk_5 = 0
+          else:
+            pass
+          chunk_3 = (j+1)*max_pivot_size + intron_extra
+          chunk_seq = seq[chunk_5:chunk_3]
+          chunk_id = id + '_' +str(j+1)
+          seqs.append((chunk_id, chunk_seq))
+
       else:
-        pass
-      chunk_3 = (j+1)*max_pivot_size + intron_extra
-      chunk_seq = seq[chunk_5:chunk_3]
-      chunk_id = id + '_' +str(j+1)
-      seqs.append((chunk_id, chunk_seq))
+        seqs.append((id ,seq))
 
-  else:
-    seqs.append((id ,seq))
+    """Se genera una lista (seqs_info) donde cada elemento es un diccionario para almacenar la infomacion de cada secuencia (longitud, sitio de inicio y final del pivot).
 
-"""Se genera una lista (seqs_info) donde cada elemento es un diccionario para almacenar la infomacion de cada secuencia (longitud, sitio de inicio y final del pivot).
+    Ademas, se le agrega a cada secuencia los sitos 5' maximos para los primers forward y reverse que se generaran.
+    Por ejemplo, para el sitio máximo 5' del primer forward (max_fw_5), se tiene en cuenta que cuando tenemos un reverse de tamaño minimo (primer_min_size) hibridando justo sobre el 3' del pivot, el primer forward solo podrá llegar a un sitio de manera que al calcular la distancia entre ambos primers sea el tamaño maximo del amplicon (amplicon_max_size). De esta manera evitamos que el programa genere primers que nunca se podrían utilizar por generar siempre amplicones de tamaños mayores al limite.
+    """
 
-Ademas, se le agrega a cada secuencia los sitos 5' maximos para los primers forward y reverse que se generaran.
-Por ejemplo, para el sitio máximo 5' del primer forward (max_fw_5), se tiene en cuenta que cuando tenemos un reverse de tamaño minimo (primer_min_size) hibridando justo sobre el 3' del pivot, el primer forward solo podrá llegar a un sitio de manera que al calcular la distancia entre ambos primers sea el tamaño maximo del amplicon (amplicon_max_size). De esta manera evitamos que el programa genere primers que nunca se podrían utilizar por generar siempre amplicones de tamaños mayores al limite.
-"""
+    seqs_info = []
+    for seq in seqs:
+        seq_len = len(seq[1])
+        pivot_start = intron_extra
+        pivot_end = seq_len-intron_extra
 
-seqs_info = []
-for seq in seqs:
-    seq_len = len(seq[1])
-    pivot_start = intron_extra
-    pivot_end = seq_len-intron_extra
+        max_fw_5 =  pivot_end + primer_min_size - amplicon_max_size
+        if max_fw_5 < 0:
+          max_fw_5 = 0
 
-    max_fw_5 =  pivot_end + primer_min_size - amplicon_max_size
-    if max_fw_5 < 0:
-      max_fw_5 = 0
+        # Limite 5' para el primer fw para que usando un reverso de tamano minimo
+        # no supere el maximo tamano de amplicon
 
-    # Limite 5' para el primer fw para que usando un reverso de tamano minimo
-    # no supere el maximo tamano de amplicon
+        max_rv_5 = pivot_start - primer_min_size + amplicon_max_size
+        if max_rv_5 > seq_len:
+          max_rv_5 = seq_len
 
-    max_rv_5 = pivot_start - primer_min_size + amplicon_max_size
-    if max_rv_5 > seq_len:
-      max_rv_5 = seq_len
+        # Limite 5' para el primer rv para que usando un forward de tamano minimo
+        # no supere el maximo tamano de amplicon
 
-    # Limite 5' para el primer rv para que usando un forward de tamano minimo
-    # no supere el maximo tamano de amplicon
-
-    seqs_info.append({
-    'seq' : seq[1], 'pivot_start' : pivot_start,
-    'pivot_end': pivot_end, 'seq_len' : seq_len,
-    'max_fw_5': max_fw_5, 'max_rv_5': max_rv_5,
-    'seq_id': seq[0]
-    })
+        seqs_info.append({
+        'seq' : seq[1], 'pivot_start' : pivot_start,
+        'pivot_end': pivot_end, 'seq_len' : seq_len,
+        'max_fw_5': max_fw_5, 'max_rv_5': max_rv_5,
+        'seq_id': seq[0]
+        })
 
 
-"""## Generacion de primers
+    """## Generacion de primers
 
-### Generacion de primers forward
-"""
+    ### Generacion de primers forward
+    """
 
-print('Generando primers forward...')
+    print('Generando primers forward...')
 
 
-for seq_info in seqs_info:
+    for seq_info in seqs_info:
 
-    '''
-    generamos proto-primers. Estos seria una libreria de todas las secuencias
-    desde el 3' del pivot hasta el 5' maximo, cada uno terminando en un 5'
-    distinto.
-    '''
+        '''
+        generamos proto-primers. Estos seria una libreria de todas las secuencias
+        desde el 3' del pivot hasta el 5' maximo, cada uno terminando en un 5'
+        distinto.
+        '''
 
-    n = 1
+        n = 1
 
-    proto_primers = []
-    seq = seq_info['seq']
-    primers_3 = seq_info['pivot_start']
-    primer_5 = seq_info ['max_fw_5']
-    primer_size = primers_3 - primer_5
-
-    while primer_size >= primer_min_size:
-        primer = seq[primer_5:primers_3]
-        proto_primers.append({'proto_primer_seq': primer, 'primer_5': primer_5})
-        primer_5 += 1
+        proto_primers = []
+        seq = seq_info['seq']
+        primers_3 = seq_info['pivot_start']
+        primer_5 = seq_info ['max_fw_5']
         primer_size = primers_3 - primer_5
 
-    '''
-    Ahora se editaran los proto-primers para que cumplan con los requisitos
-    termodinamicos. Los optimo es un ΔG de hibridacion de aprox -11,5 kcal/mol.
-    (aceptable de -10.5 a -12.5 kcal/mol).
-    Para lograr que los primers tengan este ΔG se los va recortando a los
-    proto-primers de a un nucleotido desde el 3' hasta que logran un ΔG < -12.5.
-    Luego se sigue eliminando de a un nucleotido. Si la eliminacion hace que
-    el ΔG se acerque aun mas al ΔG ideal (-11.5 kcal/mol), la eliminacion se
-    acepta. Si la eliminacion aleja al ΔG del primer del ΔG ideal con respecto
-    a antes de la eliminacion, se descarta la eliminacion.
-    Una vez aceptado el primer, se guarda la secuencia del mismo y la posicion
-    de su 5' en el diccionario de cada secuencia, dentro de la lista de
-    secuencias seqs_info
-    '''
+        while primer_size >= primer_min_size:
+            primer = seq[primer_5:primers_3]
+            proto_primers.append({'proto_primer_seq': primer, 'primer_5': primer_5})
+            primer_5 += 1
+            primer_size = primers_3 - primer_5
 
-    seq_info['forward_primers'] = []
+        '''
+        Ahora se editaran los proto-primers para que cumplan con los requisitos
+        termodinamicos. Los optimo es un ΔG de hibridacion de aprox -11,5 kcal/mol.
+        (aceptable de -10.5 a -12.5 kcal/mol).
+        Para lograr que los primers tengan este ΔG se los va recortando a los
+        proto-primers de a un nucleotido desde el 3' hasta que logran un ΔG < -12.5.
+        Luego se sigue eliminando de a un nucleotido. Si la eliminacion hace que
+        el ΔG se acerque aun mas al ΔG ideal (-11.5 kcal/mol), la eliminacion se
+        acepta. Si la eliminacion aleja al ΔG del primer del ΔG ideal con respecto
+        a antes de la eliminacion, se descarta la eliminacion.
+        Una vez aceptado el primer, se guarda la secuencia del mismo y la posicion
+        de su 5' en el diccionario de cada secuencia, dentro de la lista de
+        secuencias seqs_info
+        '''
 
-    for primer in proto_primers:
+        seq_info['forward_primers'] = []
+
+        for primer in proto_primers:
 
 
-        for i in range(len(primer['proto_primer_seq'])):
+            for i in range(len(primer['proto_primer_seq'])):
 
-            dg_i = calc_primer_dg(primer['proto_primer_seq'])
+                dg_i = calc_primer_dg(primer['proto_primer_seq'])
 
-            if dg_i < -12.5:
-                primer['proto_primer_seq'] = primer['proto_primer_seq'][:-1]
-                continue
-
-            else:
-                dist_i = abs(dg_i - dg_ideal)
-                dg_f = calc_primer_dg(primer['proto_primer_seq'][:-1])
-                dist_f = abs(dg_f - dg_ideal)
-
-                if dist_f < dist_i:
+                if dg_i < -12.5:
                     primer['proto_primer_seq'] = primer['proto_primer_seq'][:-1]
+                    continue
 
                 else:
-                    primer_seq = primer['proto_primer_seq']
+                    dist_i = abs(dg_i - dg_ideal)
+                    dg_f = calc_primer_dg(primer['proto_primer_seq'][:-1])
+                    dist_f = abs(dg_f - dg_ideal)
 
-                primer_gc = primer_seq.count('C') + primer_seq.count('G')
-                primer_gc /= len(primer_seq)
+                    if dist_f < dist_i:
+                        primer['proto_primer_seq'] = primer['proto_primer_seq'][:-1]
 
-                if primer_min_gc <= primer_gc <= primer_max_gc:
+                    else:
+                        primer_seq = primer['proto_primer_seq']
 
-                  primer_id = seq_info['seq_id'] + '_primer_f_' + str(n)
-                  n += 1
-                  seq_info['forward_primers'].append({'primer_seq': primer_seq,
-                                                      'primer_5': primer['primer_5'],
-                                                       'primer_id': primer_id})
+                    primer_gc = primer_seq.count('C') + primer_seq.count('G')
+                    primer_gc /= len(primer_seq)
 
-                break
+                    if primer_min_gc <= primer_gc <= primer_max_gc:
 
-"""### Generacion de primers reverse
+                      primer_id = seq_info['seq_id'] + '_primer_f_' + str(n)
+                      n += 1
+                      seq_info['forward_primers'].append({'primer_seq': primer_seq,
+                                                          'primer_5': primer['primer_5'],
+                                                           'primer_id': primer_id})
 
-Se utiliza un sistema identico al de la generacion de primers forward (buscando en la otra direccion), con la diferencia que una vez generados los primers, estos se almacenan usando la funcion reverse_complement, que devuelve la secuencia reversa complementaria.
-"""
+                    break
 
-print('Generando primers reverse...')
+    """### Generacion de primers reverse
 
+    Se utiliza un sistema identico al de la generacion de primers forward (buscando en la otra direccion), con la diferencia que una vez generados los primers, estos se almacenan usando la funcion reverse_complement, que devuelve la secuencia reversa complementaria.
+    """
 
-for seq_info in seqs_info:
-
-    n = 1
-
-    proto_primers = []
-    # set initial list for appending the proto-primers
-
-    seq = seq_info['seq']
-    primers_3 = seq_info['pivot_end']
-    primer_5 = seq_info['max_rv_5']
-    primer_size = primer_5 - primers_3
+    print('Generando primers reverse...')
 
 
-    while primer_size >= primer_min_size:
-        primer = seq[primers_3:primer_5]
-        proto_primers.append({'proto_primer_seq': primer, 'primer_5': primer_5})
-        primer_5 -= 1
+    for seq_info in seqs_info:
+
+        n = 1
+
+        proto_primers = []
+        # set initial list for appending the proto-primers
+
+        seq = seq_info['seq']
+        primers_3 = seq_info['pivot_end']
+        primer_5 = seq_info['max_rv_5']
         primer_size = primer_5 - primers_3
 
-    seq_info['reverse_primers'] = []
+
+        while primer_size >= primer_min_size:
+            primer = seq[primers_3:primer_5]
+            proto_primers.append({'proto_primer_seq': primer, 'primer_5': primer_5})
+            primer_5 -= 1
+            primer_size = primer_5 - primers_3
+
+        seq_info['reverse_primers'] = []
 
 
-    for primer in proto_primers:
+        for primer in proto_primers:
 
-        for i in range(len(primer['proto_primer_seq'])):
+            for i in range(len(primer['proto_primer_seq'])):
 
-            dg_i = calc_primer_dg(primer['proto_primer_seq'])
+                dg_i = calc_primer_dg(primer['proto_primer_seq'])
 
-            if dg_i < -12.5:
-                primer['proto_primer_seq'] = primer['proto_primer_seq'][1:]
-                continue
-
-            else:
-                dist_i = abs(dg_i - dg_ideal)
-                dg_f = calc_primer_dg(primer['proto_primer_seq'][1:])
-                dist_f = abs(dg_f - dg_ideal)
-
-                if dist_f < dist_i:
+                if dg_i < -12.5:
                     primer['proto_primer_seq'] = primer['proto_primer_seq'][1:]
+                    continue
 
                 else:
-                    primer_seq = reverse_complement(primer['proto_primer_seq'])
+                    dist_i = abs(dg_i - dg_ideal)
+                    dg_f = calc_primer_dg(primer['proto_primer_seq'][1:])
+                    dist_f = abs(dg_f - dg_ideal)
 
-                primer_gc = primer_seq.count('C') + primer_seq.count('G')
-                primer_gc /= len(primer_seq)
+                    if dist_f < dist_i:
+                        primer['proto_primer_seq'] = primer['proto_primer_seq'][1:]
 
-                if primer_min_gc <= primer_gc <= primer_max_gc:
-                  primer_id = seq_info['seq_id'] + '_primer_r_' + str(n)
-                  n += 1
-                  seq_info['reverse_primers'].append({'primer_seq': primer_seq,
-                                                      'primer_5': primer['primer_5'],
-                                                       'primer_id': primer_id})
-                break
+                    else:
+                        primer_seq = reverse_complement(primer['proto_primer_seq'])
 
+                    primer_gc = primer_seq.count('C') + primer_seq.count('G')
+                    primer_gc /= len(primer_seq)
 
-"""### Filtro de primers sin pareja posible
-
-Para evitar que al momento de seleccionar los primers se seleccione un primer que no tenga un par correspondiente (fw/rv) cuya combinacion genere un amplicon de un tamano permitido (< max_amplicon_size), buscamos los extremos 5' de los fw y rv mas cercanos a los pivots. Todos aquellos primers cuyos 5' tengan una distancia mayor al max_amplicon_size con respecto a estos extremos, seran filtrados.
-
-Si esto no se incluye, al momento de seleccionar los primers, si se toma un primer sin pareja posible, la funcion queda atrapada en el while loop que busca a un primer compatible.
-"""
-
-print('Filtrando primers sin pareja posible')
+                    if primer_min_gc <= primer_gc <= primer_max_gc:
+                      primer_id = seq_info['seq_id'] + '_primer_r_' + str(n)
+                      n += 1
+                      seq_info['reverse_primers'].append({'primer_seq': primer_seq,
+                                                          'primer_5': primer['primer_5'],
+                                                           'primer_id': primer_id})
+                    break
 
 
-for seq_info in seqs_info:
+    """### Filtro de primers sin pareja posible
 
-  '''Buscar el 5' del primer rv mas cercano al pivot
-  Seteamos el 5' mas cercano, al extremo (max_rv_5) para q vaya bajando
-  '''
-  closest_rv_5 = seq_info['max_rv_5']
+    Para evitar que al momento de seleccionar los primers se seleccione un primer que no tenga un par correspondiente (fw/rv) cuya combinacion genere un amplicon de un tamano permitido (< max_amplicon_size), buscamos los extremos 5' de los fw y rv mas cercanos a los pivots. Todos aquellos primers cuyos 5' tengan una distancia mayor al max_amplicon_size con respecto a estos extremos, seran filtrados.
 
-  for primer in seq_info['reverse_primers']:
-    if primer['primer_5'] < closest_rv_5:
-      closest_rv_5 = primer['primer_5']
+    Si esto no se incluye, al momento de seleccionar los primers, si se toma un primer sin pareja posible, la funcion queda atrapada en el while loop que busca a un primer compatible.
+    """
 
-  '''Buscar el 5' del primer fw mas cercano al pivot
-
-  Seteamos el 5' mas cercano, al extremo (max_rv_5) para q vaya bajando
-  '''
-
-  closest_fw_5 = seq_info['max_fw_5']
-
-  for primer in seq_info['forward_primers']:
-    if primer['primer_5'] > closest_fw_5:
-      closest_fw_5 = primer['primer_5']
-
-  '''Eliminamos de la lista de fw aquellos cuya diferencia con el
-  5' del rv mas ceracano al pivot sea mayor al amplicon_max_size.
-  Iteramos la lista en sentido inverso (reversed), para no generar
-  conflictos en la iteracion al eliminar elementos
-  '''
-  for primer in reversed(seq_info['forward_primers']):
-    if closest_rv_5 - primer['primer_5'] > amplicon_max_size:
-      seq_info['forward_primers'].remove(primer)
-
-  for primer in reversed(seq_info['reverse_primers']):
-    if primer['primer_5'] - closest_fw_5 > amplicon_max_size:
-      seq_info['reverse_primers'].remove(primer)
+    print('Filtrando primers sin pareja posible')
 
 
-print('Chequeando la existencia de targets sin primers')
+    for seq_info in seqs_info:
 
-"""Chequeo que no exista ningun target del cual no se hayan obtenido primers"""
+      '''Buscar el 5' del primer rv mas cercano al pivot
+      Seteamos el 5' mas cercano, al extremo (max_rv_5) para q vaya bajando
+      '''
+      closest_rv_5 = seq_info['max_rv_5']
 
-no_forwards = []
-to_pop = []
+      for primer in seq_info['reverse_primers']:
+        if primer['primer_5'] < closest_rv_5:
+          closest_rv_5 = primer['primer_5']
 
-for i, seq_info in enumerate(seqs_info):
-  if seq_info['forward_primers'] == []:
-    # print(seq_info['seq_id'], 'sin primers!')
-    no_forwards.append(seq_info)
-    to_pop.append(i)
+      '''Buscar el 5' del primer fw mas cercano al pivot
 
-no_reverse = []
+      Seteamos el 5' mas cercano, al extremo (max_rv_5) para q vaya bajando
+      '''
 
-for i, seq_info in enumerate(seqs_info):
-  if seq_info['reverse_primers'] == []:
-    # print(seq_info['seq_id'], 'sin primers!')
-    no_reverse.append(seq_info)
-    to_pop.append(i)
+      closest_fw_5 = seq_info['max_fw_5']
+
+      for primer in seq_info['forward_primers']:
+        if primer['primer_5'] > closest_fw_5:
+          closest_fw_5 = primer['primer_5']
+
+      '''Eliminamos de la lista de fw aquellos cuya diferencia con el
+      5' del rv mas ceracano al pivot sea mayor al amplicon_max_size.
+      Iteramos la lista en sentido inverso (reversed), para no generar
+      conflictos en la iteracion al eliminar elementos
+      '''
+      for primer in reversed(seq_info['forward_primers']):
+        if closest_rv_5 - primer['primer_5'] > amplicon_max_size:
+          seq_info['forward_primers'].remove(primer)
+
+      for primer in reversed(seq_info['reverse_primers']):
+        if primer['primer_5'] - closest_fw_5 > amplicon_max_size:
+          seq_info['reverse_primers'].remove(primer)
 
 
-for index in sorted(to_pop, reverse=True):
-    del seqs_info[index]
+    print('Chequeando la existencia de targets sin primers')
 
-if len(to_pop) > 0:
-  print('Se borraron', len(to_pop), 'secuencias sin primers!')
-else:
-  print('No se detectaron secuencias sin primers!')
+    """Chequeo que no exista ningun target del cual no se hayan obtenido primers"""
 
-######################## GENERACION DE TABLAS DE INCOMPATIBILDIAD
+    no_forwards = []
+    to_pop = []
 
-with open('all_primers.fasta', 'w') as file:
-  for seq_info in seqs_info:
-    for rev_primer in seq_info['reverse_primers']:
-        file.write('>' + rev_primer['primer_id'] + '\n')
-        file.write(rev_primer['primer_seq'] + '\n')
+    for i, seq_info in enumerate(seqs_info):
+      if seq_info['forward_primers'] == []:
+        # print(seq_info['seq_id'], 'sin primers!')
+        no_forwards.append(seq_info)
+        to_pop.append(i)
 
-    for fw_primer in seq_info['forward_primers']:
-        file.write('>' + fw_primer['primer_id'] + '\n')
-        file.write(fw_primer['primer_seq'] + '\n')
+    no_reverse = []
+
+    for i, seq_info in enumerate(seqs_info):
+      if seq_info['reverse_primers'] == []:
+        # print(seq_info['seq_id'], 'sin primers!')
+        no_reverse.append(seq_info)
+        to_pop.append(i)
+
+
+    for index in sorted(to_pop, reverse=True):
+        del seqs_info[index]
+
+    if len(to_pop) > 0:
+      print('Se borraron', len(to_pop), 'secuencias sin primers!')
+    else:
+      print('No se detectaron secuencias sin primers!')
+
+    ######################## GENERACION DE TABLAS DE INCOMPATIBILDIAD
+
+    with open('all_primers.fasta', 'w') as file:
+      for seq_info in seqs_info:
+        for rev_primer in seq_info['reverse_primers']:
+            file.write('>' + rev_primer['primer_id'] + '\n')
+            file.write(rev_primer['primer_seq'] + '\n')
+
+        for fw_primer in seq_info['forward_primers']:
+            file.write('>' + fw_primer['primer_id'] + '\n')
+            file.write(fw_primer['primer_seq'] + '\n')
 
 
 ####### Mapeo de primers al genoma de referencia
 
-print('Mapeando de primers al genoma de referencia...')
+    mapping = True
 
-bwa_aln_args = ['bwa', 'aln',
-                '-n', '1',
-                '-N',
-                '-t', '2',
-                '-M', '1',
-                'example/hg19.fasta',
-                'all_primers.fasta'
-                ]
+    if mapping:
+
+        print('Mapeando primers al genoma de referencia...')
+
+        bwa_aln_args = ['bwa', 'aln',
+                        '-n', '1',
+                        '-N',
+                        '-t', '2',
+                        '-M', '1',
+                        'example/hg19.fasta',
+                        'all_primers.fasta']
 
 
-with open('example/results_aln.sai', 'w') as fp:
-    bwa_aln_cmd = subprocess.run(bwa_aln_args, stdout=fp)
+        with open('example/results_aln.sai', 'w') as fp:
+            bwa_aln_cmd = subprocess.run(bwa_aln_args, stdout=fp)
 
-bwa_samse_args = ['bwa','samse',
-                '-n', '10000000',
-                '-f', 'out.sam',
-                'example/hg19.fasta',
-                'example/results_aln.sai',
-                'all_primers.fasta']
+        bwa_samse_args = ['bwa','samse',
+                        '-n', '10000000',
+                        '-f', 'out.sam',
+                        'example/hg19.fasta',
+                        'example/results_aln.sai',
+                        'all_primers.fasta']
 
-with open('log.txt', 'w') as fp:
-    bwa_samse_cmd = subprocess.run(bwa_samse_args, stdout=fp)
 
-print('Alineamiento terminado')
+        bwa_samse_cmd = subprocess.run(bwa_samse_args)
+
+
+
+    ### se remueve el header del sam file (lineas iniciadas con @)
+        grep_args = ['grep', '-v', '@', 'out.sam']
+
+        with open('out-mod.sam', 'w') as fp:
+            grep_cmd = subprocess.run(grep_args, stdout=fp)
+
+        print('Alineamiento terminado')
+
+        incompatible_primers.create_df('out-mod.sam')
+        incompatiblity_dict = incompatible_primers.find_incompatibilities()
+        with open('testing/incompatiblity_dict.txt', 'w') as convert_file:
+             convert_file.write(json.dumps(incompatiblity_dict))
+    else:
+        with open('testing/incompatiblity_dict.txt') as json_file:
+            incompatiblity_dict = json.load(json_file)
+
+    # with open('testing/seqs_info.pkl', 'wb') as file:
+    #     pickle.dump(seqs_info, file)
+
+else:
+    with open('testing/incompatiblity_dict.txt') as json_file:
+        incompatiblity_dict = json.load(json_file)
+    with open('testing/seqs_info.pkl', 'rb') as file:
+        seqs_info = pickle.load(file)
+    print('Variables cargadas')
+
+
 
 """### Seleccion aleatoria de primers.
 
@@ -517,14 +663,17 @@ S0_list = []
 
 for s in range(num_s0):
   for seq_info in seqs_info:
+      # Se crea el incompatible_set vacio para evtiar errores al selecccionar
+      # los primers
+      incompatible_set = set()
       select_primers(seq_info)
   '''Generamos una lista (all_primers) del set de primers inicial  seleccionado
   aleatoriamente S0'''
 
   all_primers = []
   for seq_info in seqs_info:
-      all_primers.append(seq_info['forward'])
-      all_primers.append(seq_info['reverse'])
+      all_primers.append(seq_info['forward']['primer_seq'])
+      all_primers.append(seq_info['reverse']['primer_seq'])
   '''
   Calculo del Loss del set inicial L0
 
@@ -632,6 +781,10 @@ loss = S0_list[index_min_loss][0]
 seqs_info = S0_list[index_min_loss][1]
 seqs_hash = S0_list[index_min_loss][2]
 
+
+
+seqs_info_S0 = S0_list[index_min_loss][1]
+
 # Generamos un record de los loss para luego graficarlos.
 
 lossS0 = loss
@@ -656,7 +809,7 @@ optimizacion
 indexes = [n for n in range(len(seqs_info))]
 
 # Fraccion de secuencias a cambiar durante el primer ciclo
-frac_n_i = .05
+frac_n_i = .2
 # Numero de secuencias a cambiar durante el primer ciclo
 
 # Disminucion de la fraccion de secuencias en cada ciclo
@@ -687,11 +840,17 @@ for m in range(epochs):
     n_change = (frac_n_i-m*frac_dis)*len(seqs_info_temp)
     n_change = round(n_change)
 
+    print('Secuencias a cambiar =', n_change)
+    print('Secuencias totales =', len(seqs_info))
+
     if n_change < n_min:
       n_change = n_min
 
-    # print('Cambiando', n_change, 'primers')
+     ##### Generando lista de incompatibilidades
 
+    incompatible_set = gen_incompatible_set(seqs_info_temp)
+
+    ########### Sampleo aleatorio de indices de secuencias a modif #############
     random_indexes = random.sample(indexes, n_change)
 
     ############# Modificando la hashtable #############
@@ -702,9 +861,9 @@ for m in range(epochs):
     del_primers = []
 
     for random_index in random_indexes:
-      del_forward = seqs_info_temp[random_index]['forward']
+      del_forward = seqs_info_temp[random_index]['forward']['primer_seq']
       del_primers.append(del_forward)
-      del_reverse = seqs_info_temp[random_index]['reverse']
+      del_reverse = seqs_info_temp[random_index]['reverse']['primer_seq']
       del_primers.append(del_reverse)
 
 
@@ -727,16 +886,15 @@ for m in range(epochs):
     # print('tiempo resta H primers eliminados', end - start)
 
 
-
     #### Sumar los H correspondientes a los k_mers de los nuevos primers
     start = time.time()
 
     new_primers = []
 
     for random_index in random_indexes:
-      new_forward = seqs_info_temp[random_index]['forward']
+      new_forward = seqs_info_temp[random_index]['forward']['primer_seq']
       new_primers.append(new_forward)
-      new_reverse = seqs_info_temp[random_index]['reverse']
+      new_reverse = seqs_info_temp[random_index]['reverse']['primer_seq']
       new_primers.append(new_reverse)
 
 
@@ -756,8 +914,8 @@ for m in range(epochs):
     ##### Regenerando lista de primers
     all_primers_temp = []
     for seq_info in seqs_info_temp:
-        all_primers_temp.append(seq_info['forward'])
-        all_primers_temp.append(seq_info['reverse'])
+        all_primers_temp.append(seq_info['forward']['primer_seq'])
+        all_primers_temp.append(seq_info['reverse']['primer_seq'])
 
 
     ######### Calculando el Loss de el nuevo set L(Sg) #########
@@ -796,7 +954,9 @@ for m in range(epochs):
         loss += sum([H/(dist_3+1) for dist_3 in distances]) * 2**k_mer_len * 2**gc
 
     print('L(S)=', round(loss))
+
     loss_record.append(loss)
+
 
     end = time.time()
     # print('tiempo suma Loss', end - start)
@@ -836,21 +996,48 @@ for m in range(epochs):
       lowest_loss = loss
       lowest_loss_epoch = m+1
 
+      count_incompat = True
+
+      all_primers_id = []
+      for seq_info in seqs_info_temp:
+          all_primers_id.append(seq_info['forward']['primer_id'])
+          all_primers_id.append(seq_info['reverse']['primer_id'])
+
+
+      if count_incompat:
+          inc_c = 0
+          for primer_id in all_primers_id:
+              try:
+                  for incomp_primer in incompatiblity_dict[primer_id]:
+                      if incomp_primer in incompatible_set:
+                          inc_c += 1
+              except KeyError:
+                  pass
+      print('Incompatibilidades =', inc_c)
+
     else:
       loss = loss_i
 
+##### Guardado de resultados ####
+
+with open('testing/seqs_info_inicial.pkl', 'wb') as file:
+    pickle.dump(seqs_info_S0, file)
+
+with open('testing/seqs_info_final.pkl', 'wb') as file:
+    pickle.dump(seqs_info, file)
+
+with open('testing/loss_record.pkl', 'wb') as file:
+    pickle.dump(loss_record, file)
+
+
+
 """## Grafico del Loss vs Epochs"""
-
-x_axis = [x for x in range(epochs+1)]
-
-fig = px.line(x=x_axis, y=loss_record, markers=True,
-              labels={'x':'Epoch', 'y':'L(S)'})
-fig.show()
+     1
 
 """## Set de primers finales"""
 
 for index, seq_info in enumerate(seqs_info):
   print('Secuencia target:', seq_info['seq_id'])
-  print('Forward = ',seq_info['forward'])
-  print('Reverse = ',seq_info['reverse'])
+  print('Forward = ',seq_info['forward']['primer_seq'])
+  print('Reverse = ',seq_info['reverse']['primer_seq'])
   print('\n')
