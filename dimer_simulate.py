@@ -92,7 +92,9 @@ dg_missmatchs_dict = {  'AG-T': 0.71,
                         'TG-G': 0.44,
                         'AT-T': 0.69,
                         'TT-T': 0.68
-                        }
+                        } #48
+
+                        
 
 internal_loops_dict = { 3: 3.2,
                         4: 3.6,
@@ -168,9 +170,15 @@ def score_alignment(long2mer, short2mer, double_mm_size):
             ):
             # single mismatch
 
-            mismatch_code = A2mer[:2] + '-' + B2mer[1]
+            mismatch_code_f = A2mer[:2] + '-' + B2mer[1]
+            mismatch_code_r = B2mer[:0:-1] + '-' + A2mer[1]
+            print('mismatch_code_f', mismatch_code_f)
+            print('mismatch_code_r', mismatch_code_r)
 
-            dg = dg_missmatchs_dict[mismatch_code]
+
+            dg = dg_missmatchs_dict[mismatch_code_f]
+            dg += dg_missmatchs_dict[mismatch_code_r]
+
             print('Second base mm')
 
         elif (
@@ -195,7 +203,7 @@ def score_alignment(long2mer, short2mer, double_mm_size):
             complement_base(A2mer[1]) == B2mer[1]
             ):
 
-            # first base mismatch, ignore.
+            # only first base mismatch, ignore.
             print('First base mm (ignore)')
 
             dg = 0
@@ -301,6 +309,7 @@ def dimer_simulate(primerA, primerB):
             long_2mer = long_primer[long_index:long_index+3]
             print(short_2mer[:2], '-', long_2mer[:2])
 
+
             if len(short_2mer) > 1 and len(long_2mer) > 1:
                 dg_2mer, double_mm_size = score_alignment(long_2mer, short_2mer, double_mm_size)
                 dg += dg_2mer
@@ -352,8 +361,8 @@ print('tiempo =', end-start)
 
 min_dg = 100
 
-primer1 = 'TTGCCCCGAAATTCACTTAGCAGA'.replace(' ', '')
-primer2 = 'AGG GCA TGG CAG CCG AAA TCA AAG TAT'.replace(' ', '')
+primer1 = 'GGACTGACG'.replace(' ', '')
+primer2 = 'CGTCGGTCC'.replace(' ', '')
 
 dg, pos = dimer_simulate(primer1, primer2)
 if dg < min_dg:
