@@ -55,8 +55,8 @@ intron_extra = 150
 *  verbose = si se hace un print del avance (Si es True, se muestran los prints)
 """
 
-num_s0 = 20
-epochs = 50000
+num_s0 = 3
+epochs = 30000
 verbose = True
 
 """Determinacion de parmetros del amplicon y el pivot (region a secuenciar)"""
@@ -64,7 +64,7 @@ verbose = True
 amplicon_max_size = 300
 max_pivot_size = 100
 primer_min_size = 18
-primer_max_size = 30
+primer_max_size = 26
 
 """Parametros para la generacion de secuencias random para el testing"""
 
@@ -306,7 +306,7 @@ if testing_skip == False:
 
     seqs = []
 
-    for record in SeqIO.parse("example/targets-CFTR.fasta", "fasta"):
+    for record in SeqIO.parse("example/targets-CFTR.fasta.prueba", "fasta"):
       seq = str(record.seq).upper()
       id = str(record.id)
 
@@ -596,7 +596,7 @@ if testing_skip == False:
 
 ####### Mapeo de primers al genoma de referencia
 
-    mapping = True
+    mapping = False
 
     if mapping:
 
@@ -780,7 +780,6 @@ index_min_loss = np.argmin(S0_losses)
 loss = S0_list[index_min_loss][0]
 seqs_info = S0_list[index_min_loss][1]
 seqs_hash = S0_list[index_min_loss][2]
-
 
 
 seqs_info_S0 = S0_list[index_min_loss][1]
@@ -1032,12 +1031,24 @@ with open('testing/loss_record.pkl', 'wb') as file:
 
 
 """## Grafico del Loss vs Epochs"""
-     1
 
-"""## Set de primers finales"""
+"""## Set de primers iniciales"""
 
-for index, seq_info in enumerate(seqs_info):
-  print('Secuencia target:', seq_info['seq_id'])
-  print('Forward = ',seq_info['forward']['primer_seq'])
-  print('Reverse = ',seq_info['reverse']['primer_seq'])
-  print('\n')
+print('PRIMERS INICIALES')
+
+
+with open('primers_iniciales.fasta', 'w+') as file:
+  for index, seq_info in enumerate(seqs_info_S0):
+      file.write(('>' + seq_info['seq_id'] + 'fw' + '\n' + seq_info['forward']['primer_seq']))
+      file.write('\n')
+      file.write(('>' + seq_info['seq_id'] + 'rv' + '\n' + seq_info['reverse']['primer_seq']))
+      file.write('\n')
+
+
+
+with open('primers_finales.fasta', 'w+') as file:
+  for index, seq_info in enumerate(seqs_info):
+      file.write(('>' + seq_info['seq_id'] + 'fw' + '\n' + seq_info['forward']['primer_seq']))
+      file.write('\n')
+      file.write(('>' + seq_info['seq_id'] + 'rv' + '\n' + seq_info['reverse']['primer_seq']))
+      file.write('\n')
