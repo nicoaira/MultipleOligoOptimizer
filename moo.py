@@ -55,9 +55,10 @@ intron_extra = 150
 *  verbose = si se hace un print del avance (Si es True, se muestran los prints)
 """
 
-num_s0 = 3
+num_s0 = 1
 epochs = 30000
 verbose = True
+num_pools = 3
 
 """Determinacion de parmetros del amplicon y el pivot (region a secuenciar)"""
 
@@ -254,24 +255,28 @@ def select_primers(seq_info_dict):
     seq_info_dict['forward'] = forward
     seq_info_dict['reverse'] = reverse
 
-def gen_incompatible_set(seqs_info_list):
+
+
+def gen_incompatible_set(pools_list):
 
     incompatible_set = set()
 
-    for seq_info in seqs_info_list:
-        try:
-            forward_id = seq_info['forward']['primer_id']
-            for element in incompatiblity_dict[forward_id]:
-                incompatible_set.add(element)
-        except KeyError:
-            pass
+    for pool in pools_list:
 
-        try:
-            reverse_id = seq_info['forward']['primer_id']
-            for element in incompatiblity_dict[reverse_id]:
-                incompatible_set.add(element)
-        except KeyError:
-            pass
+        for seq_info in pool:
+            try:
+                forward_id = seq_info['forward']['primer_id']
+                for element in incompatiblity_dict[forward_id]:
+                    incompatible_set.add(element)
+            except KeyError:
+                pass
+
+            try:
+                reverse_id = seq_info['forward']['primer_id']
+                for element in incompatiblity_dict[reverse_id]:
+                    incompatible_set.add(element)
+            except KeyError:
+                pass
 
     return incompatible_set
 
@@ -306,7 +311,7 @@ if testing_skip == False:
 
     seqs = []
 
-    for record in SeqIO.parse("example/targets-CFTR.fasta.prueba", "fasta"):
+    for record in SeqIO.parse("example/targets-CFTR.fasta", "fasta"):
       seq = str(record.seq).upper()
       id = str(record.id)
 
@@ -659,136 +664,170 @@ else:
 Se utiliza la funcion select_primers, la cual toma un par de primers aleatorio para cada target y los almacena el el diccionario de cada secuencia target con las keys 'forward' y 'reverse'
 """
 
+
+
+'''
+Calculo del Loss del set inicial L0
+
+Creamos una lista con todas las posibles subsecuencias (hashs) que se puedan
+formar con el numero de bases máximo setado anteriormente (seq_max_len).
+Por ejemplo, si seq_max_len = 8, la lista estara compuesta por:
+
+['A', 'T', 'G', 'C', 'AA', 'AT', 'AC', ... , 'GGGGGGGC', 'GGGGGGGG']
+'''
+
+sub_seqs = []
+
+for i in range(seq_max_len):
+  for x in gen_subseq(i):
+      sub_seqs.append(''.join(x))
+
+## distribuimos las seq_info en pooles aleatoriamente
+
+def distribute_list(seqs_info_list, num_pools):
+    random.shuffle(seqs_info_list)  # shuffle the list randomly
+    result = [[] for _ in range(num_pools)]  # create n empty sublists
+    for i, item in enumerate(seqs_info_list):
+        result[i % num_pools].append(item)  # distribute the items into the sublists in a round-robin fashion
+    return result
+
+pools_list = distribute_list(seqs_info, num_pools)
+
 S0_list = []
 
+pools_hash = [0 for _ in range(num_pools)]
+
 for s in range(num_s0):
-  for seq_info in seqs_info:
-      # Se crea el incompatible_set vacio para evtiar errores al selecccionar
-      # los primers
-      incompatible_set = set()
-      select_primers(seq_info)
-  '''Generamos una lista (all_primers) del set de primers inicial  seleccionado
-  aleatoriamente S0'''
 
-  all_primers = []
-  for seq_info in seqs_info:
-      all_primers.append(seq_info['forward']['primer_seq'])
-      all_primers.append(seq_info['reverse']['primer_seq'])
-  '''
-  Calculo del Loss del set inicial L0
+    total_loss = 0
 
-  Creamos una lista con todas las posibles subsecuencias (hashs) que se puedan
-  formar con el numero de bases máximo setado anteriormente (seq_max_len).
-  Por ejemplo, si seq_max_len = 8, la lista estara compuesta por:
+    for p_index, pool in enumerate(pools_list):
+        all_primers = []
+        for seq_info in pool:
+            # Se crea el incompatible_set vacio para evtiar errores al selecccionar
+            # los primers
+            incompatible_set = set()
 
-  ['A', 'T', 'G', 'C', 'AA', 'AT', 'AC', ... , 'GGGGGGGC', 'GGGGGGGG']
-  '''
+            select_primers(seq_info)
 
-  sub_seqs = []
+            '''Generamos una lista (all_primers) del set de primers inicial seleccionado
+            aleatoriamente S0'''
 
-  for i in range(seq_max_len):
-      for x in gen_subseq(i):
-          sub_seqs.append(''.join(x))
-  '''Creamos la hashtable utilizando las subsecuencias generadas en el paso
-  anterior como hashs. Inicializamos todos los valores de cada hash con 0.
-
-  Luego, se hace buscan estas subsecuencias en todos los primers. En cada match,
-  se suma al valor del hash de cada subsecuencia H(subseq) el valor 1/(1+d), donde
-  d es la distancia de la subsecuencia la 3' del primer.
-
-  Se implementa un loop while de manera de encontrar todas las veces que un hash
-  esta en un primer. De manera contraria solo se computaria el primer match y se
-  ignorarian los siguientes. '''
+            # print(seq_info)
+            all_primers.append(seq_info['forward']['primer_seq'])
+            all_primers.append(seq_info['reverse']['primer_seq'])
 
 
-  seqs_hash = {x: 0 for x in sub_seqs}
+            '''Creamos la hashtable utilizando las subsecuencias generadas en el paso
+            anterior como hashs. Inicializamos todos los valores de cada hash con 0.
 
-  for key in seqs_hash.keys():
-      for primer in all_primers:
-          res = primer.find(key)
+            Luego, se hace buscan estas subsecuencias en todos los primers. En cada match,
+            se suma al valor del hash de cada subsecuencia H(subseq) el valor 1/(1+d), donde
+            d es la distancia de la subsecuencia la 3' del primer.
 
-          while res > -1:
-              dist_3 = len(primer) - res - len(key)
-              seqs_hash[key] += 1/(1+dist_3)
-
-              # Searches for other appearing of the hash in the same primer
-              primer = primer[res+1:]
-              res = primer.find(key)
-  '''En el siguiente paso se debe buscar la presencia del reverso complementario
-  de cada subsecuencia en los primers. Para esto generamos una lista con el
-  reverso complementario de todos los primers de nuestro set S0.
-  '''
-
-  rev_comp_primers = []
-  for primer in all_primers:
-      rev_comp_primers.append(reverse_complement(primer))
-  '''Cuando se encuentra un match, se debe calcula H(subsecuencia)/(1/d), donde d
-  es la distancia al 3' del reverso complementario.
-
-  Para esto comenzamos primero generamos un diccionario vacio que tiene como keys
-  todo los k_mers (subsecuencias de largo 1 a seq_max_len) y a cada una de esta
-  s se les asigna como valor una lista vacia.
-  '''
-
-  k_mers_hash = {}
-
-  for i in range(seq_max_len):
-      for primer in rev_comp_primers:
-          for n in range(len(primer)-i):
-              k_mer = primer[n:i+n+1]
-              k_mers_hash[k_mer] = []
-  '''Luego barremos todas las subsecuencias de los primers nuevamente, agregando a
-  la lista de cada k_mer (encontrada k_mers_hash[k_mer], las distancias al 3' del
-  primer de cada subsecuencia.'''
-
-  for i in range(seq_max_len):
-      for primer in rev_comp_primers:
-          for n in range(len(primer)-i):
-              k_mer = primer[n:i+n+1]
-              dist_3 = len(primer)-(n+i+1)
-              k_mers_hash[k_mer].append(dist_3)
-  '''
-  Luego, para cada subsecuencia calculamos el badness con la siguiente ecuacion:
+            Se implementa un loop while de manera de encontrar todas las veces que un hash
+            esta en un primer. De manera contraria solo se computaria el primer match y se
+            ignorarian los siguientes. '''
 
 
-  $H(s) = \sum_{}^{}\frac{H(rev.comp)}{d+1} \times 2^{len}\times 2^{numGC}$
 
-  Cada H(s) es adicionado al Loss, obteniendo el resultado final al final del
-  bucle.'''
+        seqs_hash = {x: 0 for x in sub_seqs}
 
-  loss = 0
+        for key in seqs_hash.keys():
+            for primer in all_primers:
+                res = primer.find(key)
+                while res > -1:
+                    dist_3 = len(primer) - res - len(key)
+                    seqs_hash[key] += 1/(1+dist_3)
 
-  for k_mer, distances in k_mers_hash.items():
-      k_mer_len = len(k_mer)
-      gc = k_mer.count('C') + k_mer.count('G')
-      H = seqs_hash[k_mer]
-      loss += sum([H/(dist_3+1) for dist_3 in distances]) * 2**k_mer_len * 2**gc
+                    # Searches for other appearing of the hash in the same primer
 
-  print('L(S0)=',  round(loss))
+                    primer = primer[res+1:]
+                    res = primer.find(key)
 
-  S0_list.append((loss, copy.deepcopy(seqs_info), copy.deepcopy(seqs_hash)))
+        '''En el siguiente paso se debe buscar la presencia del reverso complementario
+        de cada subsecuencia en los primers. Para esto generamos una lista con el
+        reverso complementario de todos los primers de nuestro set S0.
+        '''
+
+        rev_comp_primers = []
+        for primer in all_primers:
+            rev_comp_primers.append(reverse_complement(primer))
+
+        '''Cuando se encuentra un match, se debe calcula H(subsecuencia)/(1/d), donde d
+        es la distancia al 3' del reverso complementario.
+
+        Para esto comenzamos primero generamos un diccionario vacio que tiene como keys
+        todo los k_mers (subsecuencias de largo 1 a seq_max_len) y a cada una de esta
+        s se les asigna como valor una lista vacia.
+        '''
+
+        k_mers_hash = {}
+
+        for i in range(seq_max_len):
+            for primer in rev_comp_primers:
+                for n in range(len(primer)-i):
+                    k_mer = primer[n:i+n+1]
+                    k_mers_hash[k_mer] = []
+
+        '''Luego barremos todas las subsecuencias de los primers nuevamente, agregando a
+        la lista de cada k_mer (encontrada k_mers_hash[k_mer], las distancias al 3' del
+        primer de cada subsecuencia.'''
+
+        for i in range(seq_max_len):
+            for primer in rev_comp_primers:
+                for n in range(len(primer)-i):
+                    k_mer = primer[n:i+n+1]
+                    dist_3 = len(primer)-(n+i+1)
+                    k_mers_hash[k_mer].append(dist_3)
+
+        '''
+        Luego, para cada subsecuencia calculamos el badness con la siguiente ecuacion:
+
+
+        $H(s) = sum_{}^{}\frac{H(rev.comp)}{d+1} \times 2^{len}\times 2^{numGC}$
+
+        Cada H(s) es adicionado al Loss, obteniendo el resultado final al final del
+        bucle.'''
+
+        pool_loss = 0
+
+        for k_mer, distances in k_mers_hash.items():
+            k_mer_len = len(k_mer)
+            gc = k_mer.count('C') + k_mer.count('G')
+            H = seqs_hash[k_mer]
+            pool_loss += sum([H/(dist_3+1) for dist_3 in distances]) * 2**k_mer_len * 2**gc
+
+            pools_hash[p_index] = seqs_hash
+
+        print('Pool', p_index+1, '- L(S0)=',  round(pool_loss))
+
+        total_loss += pool_loss
+
+
+    S0_list.append((total_loss, copy.deepcopy(pools_list), copy.deepcopy(pools_hash)))
 
 """Se selecciona como set S0 a usarse como seed, a aquel que presente menor valor de L(S0)"""
 
 S0_losses = []
 
-for loss, seq_info, seqs_hash in S0_list:
-  S0_losses.append(loss)
+for total_loss, _, _ in S0_list:
+  S0_losses.append(total_loss)
 
 index_min_loss = np.argmin(S0_losses)
 
-loss = S0_list[index_min_loss][0]
-seqs_info = S0_list[index_min_loss][1]
-seqs_hash = S0_list[index_min_loss][2]
+total_loss = S0_list[index_min_loss][0]
+pools_list = S0_list[index_min_loss][1]
+pools_hash = S0_list[index_min_loss][2]
 
 
-seqs_info_S0 = S0_list[index_min_loss][1]
+pools_list_S0 = S0_list[index_min_loss][1]
 
-# Generamos un record de los loss para luego graficarlos.
+# Generamos un record de los total_loss para luego graficarlos.
 
-lossS0 = loss
+lossS0 = total_loss
 loss_record = []
-loss_record.append(loss)
+loss_record.append(total_loss)
 
 """## Bucle de optimizacion
 
@@ -805,10 +844,12 @@ Si L(S<sub>g</sub>) < L(S<sub>g-1</sub>), el set de primers S<sub>g</sub> pasa a
 '''Indices de las secuencias para luego hacer el sampleo aleatorio para la
 optimizacion
 '''
-indexes = [n for n in range(len(seqs_info))]
+
+
+
 
 # Fraccion de secuencias a cambiar durante el primer ciclo
-frac_n_i = .2
+frac_n_i = .10
 # Numero de secuencias a cambiar durante el primer ciclo
 
 # Disminucion de la fraccion de secuencias en cada ciclo
@@ -817,149 +858,203 @@ frac_dis = 0.0001
 # Minimo de secuencias a cambiar en cada ciclo
 n_min = 1
 
+lowest_loss = total_loss
+
 for m in range(epochs):
+
+    pools_sizes = [len(pool) for pool in pools_list]
+
+    pools_indexes = []
+    for pool in pools_list:
+        indexes = [n for n in range(len(pool))]
+        pools_indexes.append(indexes)
 
     if verbose == True:
       print('Epoch = ' + str(m+1) + '/' + str(epochs) )
 
-    loss_i = loss
+    total_loss_i = total_loss
 
     start = time.time()
 
 
-    seqs_info_temp = copy.deepcopy(seqs_info)
-    seqs_hash_temp = copy.deepcopy(seqs_hash)
+    pools_list_temp = copy.deepcopy(pools_list)
+    pools_hash_temp = copy.deepcopy(pools_hash)
 
     end = time.time()
+
     # print('tiempo deepcopy', end - start)
 
 
     ##### Seleccion random de un par de primers a cambiar
 
-    n_change = (frac_n_i-m*frac_dis)*len(seqs_info_temp)
+    seq_totales = sum([len(pool) for pool in pools_list_temp])
+    n_change = (frac_n_i-m*frac_dis)*seq_totales
     n_change = round(n_change)
 
     print('Secuencias a cambiar =', n_change)
-    print('Secuencias totales =', len(seqs_info))
+    print('Secuencias totales =', seq_totales)
 
     if n_change < n_min:
       n_change = n_min
 
      ##### Generando lista de incompatibilidades
 
-    incompatible_set = gen_incompatible_set(seqs_info_temp)
+    incompatible_set = gen_incompatible_set(pools_list_temp)
 
     ########### Sampleo aleatorio de indices de secuencias a modif #############
-    random_indexes = random.sample(indexes, n_change)
+    
+    # Se seleccionan los pooles a cambiar, dandole un peso segun el tamano de cada pool
+
+    pool_to_change = random.choices(range(len(pools_list_temp)), weights=pools_sizes, k=n_change)
+
+    # se crea la lista de random_indexes, donde se guardaran los indices de
+    # las secuencias a cambiar. Por ejemplo, si hay 3 pooles, podemos tener
+    # random_indexes = [[1, 4, 7, 21], [4, 10, 8], [22, 1]], lo que quiere
+    # decir que se cambiaran las seuencias 1, 4, 7 y 21 del primer pool (pool 0),
+    # las secuencias 4, 10 y 8 del pool 1, etc.
+
+    random_indexes = [[] for pool in pools_list_temp]
+
+
+    for pool_index in pool_to_change:
+        try:
+            seq_index = random.choice(pools_indexes[pool_index])
+            random_indexes[pool_index].append(seq_index)
+            pools_indexes[pool_index].remove(seq_index)
+        except IndexError as e:
+            print(e)
+            print(pool_index)
+            print(pools_indexes)
+
+    for pool_random_indexes in random_indexes:
+        pool_random_indexes.sort(reverse=True)
+
 
     ############# Modificando la hashtable #############
 
     #### Restar los H correspondientes a los k_mers de estos primers eliminados
+
+
     start = time.time()
 
-    del_primers = []
+    # lista para alamacenar los nuevos primers en cada pool,
+    # para luego sumar su contribucion a sus respectivos
+    # hashtables
 
-    for random_index in random_indexes:
-      del_forward = seqs_info_temp[random_index]['forward']['primer_seq']
-      del_primers.append(del_forward)
-      del_reverse = seqs_info_temp[random_index]['reverse']['primer_seq']
-      del_primers.append(del_reverse)
+    pools_new_primers = [[] for pool in pools_list_temp]
+
+    for p_index, pool in enumerate(pools_list_temp):
+
+        del_primers = []
+
+        for random_index in random_indexes[p_index]:
+          del_forward = pool[random_index]['forward']['primer_seq']
+          del_primers.append(del_forward)
+          del_reverse = pool[random_index]['reverse']['primer_seq']
+          del_primers.append(del_reverse)
 
 
-    for key in seqs_hash_temp.keys():
-        for primer in del_primers:
-            res = primer.find(key)
-            while res > -1:
-                dist_3 = len(primer) - res - len(key)
-                seqs_hash_temp[key] -= 1/(1+dist_3)
-                if seqs_hash_temp[key] < 1E-3:
-                    seqs_hash_temp[key] = 0
-                primer = primer[res+1:]
+        for key in pools_hash_temp[p_index].keys():
+            for primer in del_primers:
                 res = primer.find(key)
+                while res > -1:
+                    dist_3 = len(primer) - res - len(key)
+                    pools_hash_temp[p_index][key] -= 1/(1+dist_3)
+                    if pools_hash_temp[p_index][key] < 1E-3:
+                        pools_hash_temp[p_index][key] = 0
+                    primer = primer[res+1:]
+                    res = primer.find(key)
 
 
-    for random_index in random_indexes:
-      select_primers(seqs_info_temp[random_index])
+        for i, random_index in enumerate(random_indexes[p_index]):
+            
+            select_primers(pool[random_index])
 
-    end = time.time()
-    # print('tiempo resta H primers eliminados', end - start)
+            assigned_pool = random.randint(0, len(pools_list_temp)-1)
+
+            if assigned_pool != p_index:
+                seq_to_move = pool.pop(random_index)
+                pools_list_temp[assigned_pool].append(seq_to_move)
+            else:
+                seq_to_move = pool[random_index]
+
+            new_forward = seq_to_move['forward']['primer_seq']
+            pools_new_primers[assigned_pool].append(new_forward)
+            new_reverse = seq_to_move['reverse']['primer_seq']
+            pools_new_primers[assigned_pool].append(new_reverse)
+
+            # asignar los pares de primers aleatoriamente a alguno de los pooles
 
 
-    #### Sumar los H correspondientes a los k_mers de los nuevos primers
-    start = time.time()
+            #### Sumar los H correspondientes a los k_mers de los nuevos primers
 
-    new_primers = []
+    total_loss = 0
 
-    for random_index in random_indexes:
-      new_forward = seqs_info_temp[random_index]['forward']['primer_seq']
-      new_primers.append(new_forward)
-      new_reverse = seqs_info_temp[random_index]['reverse']['primer_seq']
-      new_primers.append(new_reverse)
+    for p_index, pool in enumerate(pools_list_temp):
 
+        new_primers = pools_new_primers[pool_index]
 
-    for key in seqs_hash_temp.keys():
-        for primer in new_primers:
-            res = primer.find(key)
-            while res > -1:
-                dist_3 = len(primer) - res - len(key)
-                seqs_hash_temp[key] += 1/(1+dist_3)
-                primer = primer[res+1:]
+        for key in pools_hash_temp[p_index].keys():
+            for primer in new_primers:
                 res = primer.find(key)
-
-    end = time.time()
-    # print('tiempo suma H primers nuevos', end - start)
-
-
-    ##### Regenerando lista de primers
-    all_primers_temp = []
-    for seq_info in seqs_info_temp:
-        all_primers_temp.append(seq_info['forward']['primer_seq'])
-        all_primers_temp.append(seq_info['reverse']['primer_seq'])
+                while res > -1:
+                    dist_3 = len(primer) - res - len(key)
+                    pools_hash_temp[p_index][key] += 1/(1+dist_3)
+                    primer = primer[res+1:]
+                    res = primer.find(key)
 
 
-    ######### Calculando el Loss de el nuevo set L(Sg) #########
+        ##### Regenerando lista de primers
 
-    start = time.time()
+        all_primers_temp = []
 
-    rev_comp_primers = []
-    for primer in all_primers_temp:
-        rev_comp_primers.append(reverse_complement(primer))
-
-
-    k_mers_hash = {}
-
-    for i in range(seq_max_len):
-        for primer in rev_comp_primers:
-            for n in range(len(primer)-i):
-                k_mer = primer[n:i+n+1]
-                k_mers_hash[k_mer] = []
-
-    for i in range(seq_max_len):
-        for primer in rev_comp_primers:
-            for n in range(len(primer)-i):
-                k_mer = primer[n:i+n+1]
-                dist_3 = len(primer)-(n+i+1)
-                k_mers_hash[k_mer].append(dist_3)
-
-    end = time.time()
-    # print('tiempo HASH rev comp', end - start)
-
-    loss = 0
-
-    for k_mer, distances in k_mers_hash.items():
-        k_mer_len = len(k_mer)
-        gc = k_mer.count('C') + k_mer.count('G')
-        H = seqs_hash_temp[k_mer]
-        loss += sum([H/(dist_3+1) for dist_3 in distances]) * 2**k_mer_len * 2**gc
-
-    print('L(S)=', round(loss))
-
-    loss_record.append(loss)
+        for seq_info in pool:
+            all_primers_temp.append(seq_info['forward']['primer_seq'])
+            all_primers_temp.append(seq_info['reverse']['primer_seq'])
 
 
-    end = time.time()
-    # print('tiempo suma Loss', end - start)
 
+        ######### Calculando el Loss de el nuevo set L(Sg) #########
+
+
+        rev_comp_primers = []
+        for primer in all_primers_temp:
+            rev_comp_primers.append(reverse_complement(primer))
+
+
+        k_mers_hash = {}
+
+        for i in range(seq_max_len):
+            for primer in rev_comp_primers:
+                for n in range(len(primer)-i):
+                    k_mer = primer[n:i+n+1]
+                    k_mers_hash[k_mer] = []
+
+        for i in range(seq_max_len):
+            for primer in rev_comp_primers:
+                for n in range(len(primer)-i):
+                    k_mer = primer[n:i+n+1]
+                    dist_3 = len(primer)-(n+i+1)
+                    k_mers_hash[k_mer].append(dist_3)
+
+        end = time.time()
+        pool_loss = 0
+
+        for k_mer, distances in k_mers_hash.items():
+            k_mer_len = len(k_mer)
+            gc = k_mer.count('C') + k_mer.count('G')
+            H = pools_hash_temp[p_index][k_mer]
+            pool_loss += sum([H/(dist_3+1) for dist_3 in distances]) * 2**k_mer_len * 2**gc
+
+        print('Pool', p_index+1 ,'- L(S)=', round(pool_loss))
+
+        total_loss += pool_loss
+
+    print('Total loss - L(S)=', round(total_loss))
+    print('Lowest loss - L(S)=', round(lowest_loss))
+
+
+    loss_record.append(total_loss)
 
 
     ''' Calcular p, la probabilidad de aceptar un set que empeora el loss.
@@ -975,7 +1070,7 @@ for m in range(epochs):
       k = .1
       C = C0 * math.exp(-m*k)
       try:
-        p = min(1, math.exp((loss_i-loss)/(C*num_seq)))
+        p = min(1, math.exp((total_loss_i-loss)/(C*num_seq)))
       except OverflowError:
         p = 1
       finally:
@@ -983,25 +1078,29 @@ for m in range(epochs):
         accept_S_temp = random.random() < p
 
     else:
-      if loss_i > loss:
+      if total_loss_i > total_loss:
         accept_S_temp = True
       else:
         accept_S_temp = False
 
 
     if accept_S_temp:
-      seqs_hash = copy.deepcopy(seqs_hash_temp)
-      seqs_info = copy.deepcopy(seqs_info_temp)
-      lowest_loss = loss
+      pools_hash = copy.deepcopy(pools_hash_temp)
+      pools_list = copy.deepcopy(pools_list_temp)
+      lowest_loss = total_loss
       lowest_loss_epoch = m+1
 
       count_incompat = True
 
       all_primers_id = []
-      for seq_info in seqs_info_temp:
-          all_primers_id.append(seq_info['forward']['primer_id'])
-          all_primers_id.append(seq_info['reverse']['primer_id'])
-
+      for pool in pools_list_temp:
+        for seq_info in pool:
+            try:
+                all_primers_id.append(seq_info['forward']['primer_id'])
+                all_primers_id.append(seq_info['reverse']['primer_id'])
+            except:
+                print(seq_info)
+                raise TypeError
 
       if count_incompat:
           inc_c = 0
@@ -1015,15 +1114,15 @@ for m in range(epochs):
       print('Incompatibilidades =', inc_c)
 
     else:
-      loss = loss_i
+      total_loss = total_loss_i
 
 ##### Guardado de resultados ####
 
 with open('testing/seqs_info_inicial.pkl', 'wb') as file:
-    pickle.dump(seqs_info_S0, file)
+    pickle.dump(pools_list_S0, file)
 
 with open('testing/seqs_info_final.pkl', 'wb') as file:
-    pickle.dump(seqs_info, file)
+    pickle.dump(pools_list, file)
 
 with open('testing/loss_record.pkl', 'wb') as file:
     pickle.dump(loss_record, file)
@@ -1038,7 +1137,7 @@ print('PRIMERS INICIALES')
 
 
 with open('primers_iniciales.fasta', 'w+') as file:
-  for index, seq_info in enumerate(seqs_info_S0):
+  for index, seq_info in enumerate(pools_list_S0):
       file.write(('>' + seq_info['seq_id'] + 'fw' + '\n' + seq_info['forward']['primer_seq']))
       file.write('\n')
       file.write(('>' + seq_info['seq_id'] + 'rv' + '\n' + seq_info['reverse']['primer_seq']))
@@ -1047,7 +1146,7 @@ with open('primers_iniciales.fasta', 'w+') as file:
 
 
 with open('primers_finales.fasta', 'w+') as file:
-  for index, seq_info in enumerate(seqs_info):
+  for index, seq_info in enumerate(pools_list):
       file.write(('>' + seq_info['seq_id'] + 'fw' + '\n' + seq_info['forward']['primer_seq']))
       file.write('\n')
       file.write(('>' + seq_info['seq_id'] + 'rv' + '\n' + seq_info['reverse']['primer_seq']))
